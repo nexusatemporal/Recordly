@@ -34,6 +34,7 @@
 		"build:cursor-monitor": "node scripts/build-cursor-monitor.mjs",
 		"build:mac": "npm run build:platform-native-helpers && tsc && vite build --config vite.config.ts && npm run normalize:electron-main-cjs && npm run smoke:electron-main-cjs && electron-builder --mac",
 		"build:win": "npm run build:platform-native-helpers && tsc && vite build --config vite.config.ts && npm run normalize:electron-main-cjs && npm run smoke:electron-main-cjs && electron-builder --win",
+		"build:win:store": "node scripts/build-windows-store.mjs",
 		"build:linux": "npm run build:platform-native-helpers && tsc && vite build --config vite.config.ts && npm run normalize:electron-main-cjs && npm run smoke:electron-main-cjs && electron-builder --linux",
 		"i18n:check": "node scripts/i18n-check.mjs",
 		"benchmark:export-queues": "node scripts/benchmark-export-queues.mjs",
@@ -43,11 +44,16 @@
 		"verify:macos-distribution": "node scripts/verify-macos-distribution.mjs",
 		"checksums:release": "node scripts/write-release-checksums.mjs",
 		"release:create": "node scripts/create-release.mjs",
+		"release:check-cloud": "node scripts/check-release-cloud-config.mjs",
 		"test": "vitest --run",
 		"test:watch": "vitest",
 		"typecheck": "tsc --noEmit",
 		"test:ui": "playwright test",
-		"dev:ui": "vite --mode ui --host 127.0.0.1"
+		"dev:ui": "vite --mode ui --host 127.0.0.1",
+		"announcement-studio": "vite --config vite.studio.config.ts",
+		"return-pages:build": "node scripts/build-return-pages.mjs",
+		"email:build": "npm run return-pages:build && node scripts/build-auth-emails.mjs",
+		"email:preview": "vite --config vite.email.config.ts"
 	},
 	"dependencies": {
 		"@phosphor-icons/react": "^2.1.10",
@@ -84,6 +90,7 @@
 		"emoji-picker-react": "^4.16.1",
 		"fast-check": "^4.5.2",
 		"gif.js": "^0.2.0",
+		"json5": "2.2.3",
 		"lightningcss": "^1.32.0",
 		"mediabunny": "^1.25.1",
 		"motion": "^12.23.24",

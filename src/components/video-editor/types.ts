@@ -134,7 +134,7 @@ export type EditorEffectSection =
 
 export type ZoomTransitionEasing = "recordly" | "glide" | "smooth" | "snappy" | "linear";
 
-export type WebcamShape = "circle" | "squircle";
+export type WebcamShape = "circle" | "squircle" | "rectangle";
 
 export type WebcamCorner = "top-left" | "top-right" | "bottom-left" | "bottom-right";
 export type WebcamPositionPreset =
@@ -206,9 +206,9 @@ export const DEFAULT_CONNECTED_ZOOM_DURATION_MS = 1000;
 export const DEFAULT_ZOOM_IN_EASING: ZoomTransitionEasing = "recordly";
 export const DEFAULT_ZOOM_OUT_EASING: ZoomTransitionEasing = "recordly";
 export const DEFAULT_CONNECTED_ZOOM_EASING: ZoomTransitionEasing = "glide";
-export const DEFAULT_WEBCAM_SIZE = 40;
+export const DEFAULT_WEBCAM_SIZE = 30;
 export const DEFAULT_WEBCAM_REACT_TO_ZOOM = true;
-export const DEFAULT_WEBCAM_ROUNDNESS = 50;
+export const DEFAULT_WEBCAM_ROUNDNESS = 20;
 export const DEFAULT_SHADOW_INTENSITY = 0.5;
 export const DEFAULT_WEBCAM_SHADOW = 0.2;
 export const DEFAULT_WEBCAM_MARGIN = 24;
