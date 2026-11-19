@@ -853,10 +853,10 @@ export function setHudOverlayRecordingActive(recording: boolean): void {
 	hudOverlayFallbackExpanded = false;
 	applyHudOverlayBounds();
 	reassertHudOverlayCaptureProtection();
-	// Start in passthrough mode. Forwarded pointer movement lets the renderer
-	// make the visible HUD controls interactive when the pointer reaches them,
-	// while transparent parts never block the recorded application.
-	setHudOverlayMousePassthrough(true);
+	// Keep whatever hover state the renderer last reported. Forcing passthrough
+	// here made the HUD click-through right after the user pressed record, so the
+	// stop button swallowed clicks until the pointer moved again.
+	setHudOverlayMousePassthrough(hudOverlayIgnoringMouse);
 }
 
 export function createUpdateToastWindow(): BrowserWindow {
@@ -1325,7 +1325,10 @@ export function showOnboardingWindow(options?: {
 	};
 	if (onboardingWindow && !onboardingWindow.isDestroyed()) {
 		hideOtherOnboardingWindows(onboardingWindow);
-		if (!app.isPackaged && typeof options?.preview === "boolean") load(onboardingWindow, query);
+		if (!app.isPackaged && typeof options?.preview === "boolean") {
+			const intro = onboardingIntroWindow && !onboardingIntroWindow.isDestroyed();
+			load(onboardingWindow, intro ? { ...query, welcomeSoundtrack: "intro" } : query);
+		}
 		onboardingWindow.setBounds(getOnboardingWindowBounds());
 		focusOnboardingWindow();
 		return onboardingWindow;
@@ -1384,7 +1387,7 @@ export function showOnboardingWindow(options?: {
 	} else if (!options?.returning) {
 		win.once("ready-to-show", show);
 	}
-	load(win, query);
+	load(win, playIntro ? { ...query, welcomeSoundtrack: "intro" } : query);
 	return win;
 }
 
