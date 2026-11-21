@@ -736,12 +736,6 @@ interface Window {
 			prompted: boolean;
 			error?: string;
 		}>;
-		requestAccessibilityPermission: () => Promise<{
-			success: boolean;
-			trusted: boolean;
-			prompted: boolean;
-			error?: string;
-		}>;
 		getScreenRecordingPermissionStatus: () => Promise<{
 			success: boolean;
 			status: string;
@@ -1039,7 +1033,6 @@ interface Window {
 			error?: string;
 		}>;
 		showRecordingPermissions: () => Promise<void>;
-		onRecordingPermissionsRequested: (callback: () => void) => () => void;
 		showRecordingHud: () => Promise<void>;
 		showOnboardingWindow: (options?: { preview?: boolean }) => Promise<boolean>;
 		replayOnboardingIntro?: () => Promise<boolean>;

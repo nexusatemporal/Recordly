@@ -554,11 +554,6 @@ contextBridge.exposeInMainWorld("electronAPI", {
 		return await ipcRenderer.invoke("get-sources", opts);
 	},
 	showRecordingPermissions: () => ipcRenderer.invoke("show-recording-permissions"),
-	onRecordingPermissionsRequested: (callback: () => void) => {
-		const listener = () => callback();
-		ipcRenderer.on("recording-permissions-requested", listener);
-		return () => ipcRenderer.removeListener("recording-permissions-requested", listener);
-	},
 	showRecordingHud: () => ipcRenderer.invoke("show-recording-hud"),
 	showOnboardingWindow: (options?: { preview?: boolean }) =>
 		ipcRenderer.invoke("show-onboarding-window", options),
@@ -777,9 +772,6 @@ contextBridge.exposeInMainWorld("electronAPI", {
 	},
 	getAccessibilityPermissionStatus: () => {
 		return ipcRenderer.invoke("get-accessibility-permission-status");
-	},
-	requestAccessibilityPermission: () => {
-		return ipcRenderer.invoke("request-accessibility-permission");
 	},
 	getScreenRecordingPermissionStatus: () => {
 		return ipcRenderer.invoke("get-screen-recording-permission-status");
