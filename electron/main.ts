@@ -16,6 +16,7 @@ import {
 	Tray,
 } from "electron";
 import { activateFromDesktopIcon } from "./appActivation";
+import { createAppLinkRelay, findActivationLink, shouldForwardPlainLaunch } from "./appLinkRelay";
 import { initializeInstanceSession, RECORDINGS_DIR } from "./appPaths";
 import { readAppSetting, writeAppSetting } from "./appSettingsStore";
 import { createAuthCallbackController } from "./authCallback";
@@ -33,7 +34,7 @@ import {
 	type ProjectMenuAction,
 	withHiddenDockEditorMenus,
 } from "./editorCommandMenu";
-import { getGpuSwitches } from "./gpuSwitches";
+import { getGpuBlocklistOverrideSwitches, getGpuSwitches } from "./gpuSwitches";
 import {
 	cleanupAllExportStreams,
 	cleanupNativeVideoExportSessions,
@@ -43,6 +44,7 @@ import {
 } from "./ipc/handlers";
 import { recordingFocus } from "./ipc/recording/focus";
 import { clearRecordingTrashUndo } from "./ipc/recording/library";
+import { setRecordingZoomShortcutActive } from "./ipc/recording/zoomShortcut";
 import { resolveDisplayMediaSource } from "./ipc/register/sourceMapping";
 import { validateAppLocaleRequest } from "./localeIpc";
 import { ensureMediaServer } from "./mediaServer";
@@ -79,6 +81,7 @@ import {
 } from "./updater";
 import {
 	beginHudCaptureProtection,
+	cancelHiddenHudRestoreOnActivation,
 	closeOnboardingWindow,
 	createEditorWindow,
 	createHudOverlayWindow,
@@ -94,6 +97,7 @@ import {
 	replayOnboardingIntro,
 	revealStartupOnboardingWindow,
 	setHudOverlayRecordingActive,
+	shouldRestoreHiddenHudOnActivation,
 	showOnboardingWindow,
 	showUpdateToastWindow,
 } from "./windows";
@@ -150,9 +154,9 @@ ipcMain.handle("resolve-startup-onboarding", (event, action: unknown) => {
 ignoreBrokenConsolePipe(process.stdout);
 ignoreBrokenConsolePipe(process.stderr);
 
-app.commandLine.appendSwitch("ignore-gpu-blocklist");
-app.commandLine.appendSwitch("enable-unsafe-webgpu");
-app.commandLine.appendSwitch("enable-gpu-rasterization");
+for (const gpuSwitch of getGpuBlocklistOverrideSwitches()) {
+	app.commandLine.appendSwitch(gpuSwitch);
+}
 
 app.on("web-contents-created", (_event, contents) => {
 	if (!shouldHardenWebContentsType(contents.getType())) {
@@ -277,8 +281,62 @@ let isCreatingEditorWindow = false;
 
 const authCallbacks = createAuthCallbackController({
 	isDev: IS_DEV,
-	focusApp: () => focusOrCreateMainWindow(),
+	// recordly:// hand-offs depend on the browser's "Open app?" prompt, which can
+	// silently do nothing on Windows. macOS keeps its working open-url route.
+	loopbackReturn: process.platform !== "darwin",
+	focusApp: () => bringAppForward(),
 });
+// Lets a browser link (e.g. "Open in Recordly") that launched a new process on
+// Windows/Linux bring the running instance forward instead of a new window.
+const appLinks = createAppLinkRelay({
+	directory: path.join(app.getPath("userData"), "app-links"),
+	protocol: authCallbacks.protocol,
+});
+
+/** Bring Recordly forward after a sign-in return or an "Open in Recordly" link. */
+function bringAppForward() {
+	if (isAppQuitting) return;
+	focusOrCreateMainWindow();
+	// Windows refuses focus() from a background process (the browser owns the
+	// foreground), so the window would only flash in the taskbar. Briefly making
+	// it topmost is permitted and leaves it above other apps once cleared.
+	// Windows that are already always-on-top (the HUD, toasts) are left alone.
+	if (process.platform !== "win32") return;
+	const target = getOnboardingWindow() ?? mainWindow;
+	if (!target || target.isDestroyed() || !target.isVisible() || target.isAlwaysOnTop()) return;
+	target.setAlwaysOnTop(true);
+	target.focus();
+	target.setAlwaysOnTop(false);
+}
+
+/** True when a running instance accepted this launch's activation link. */
+async function forwardActivationLink(): Promise<boolean> {
+	if (process.platform === "darwin") return false;
+	if (findActivationLink(process.argv, authCallbacks.protocol)) return appLinks.forward();
+	// In a source checkout the OS starts `recordly-dev://` links without the dev
+	// server environment, so look for the running development app explicitly.
+	if (!app.isPackaged && findActivationLink(process.argv, "recordly-dev"))
+		return createAppLinkRelay({
+			directory: path.join(app.getPath("appData"), "Recordly-dev", "app-links"),
+			protocol: "recordly-dev",
+		}).forward();
+	// Repeated clicks on the shortcut bring the running app forward instead of
+	// opening another instance with its own recording controls.
+	if (
+		shouldForwardPlainLaunch({
+			platform: process.platform,
+			isPackaged: app.isPackaged,
+			smokeExport: IS_SMOKE_EXPORT,
+		})
+	) {
+		if (await appLinks.forward()) return true;
+		// The relay only listens once startup finishes, so clicks during another
+		// launch's startup find nobody. Electron's lock settles that race: the first
+		// launch keeps it and later ones exit, raising "second-instance" there.
+		return !app.requestSingleInstanceLock({ recordlyDesktopLaunch: true });
+	}
+	return false;
+}
 
 app.on("open-url", (event, rawUrl) => {
 	try {
@@ -542,8 +600,10 @@ function focusOrCreateMainWindow() {
 		// work because they receive an XDG activation token via StatusNotifierItem.ProvideXdgActivationToken;
 		// Electron's tray doesn't handle that yet. Workaround: destroy and recreate the HUD so the new
 		// window gets focus (creation path works). Only for HUD, not editor.
+		// Never recreate the HUD while it owns an active recording.
 		if (
 			process.platform === "linux" &&
+			!desktopRecordingActive &&
 			!mainWindow.isFocused() &&
 			!isEditorWindow(mainWindow)
 		) {
@@ -716,6 +776,7 @@ function activateDesktopEntryPoint() {
 			return updateToast?.isVisible() ? updateToast : null;
 		},
 		getHudWindow: getHudOverlayWindow,
+		restoreHiddenHud: shouldRestoreHiddenHudOnActivation(),
 		showHud: () => {
 			showHudOverlayFromTray();
 		},
@@ -1069,6 +1130,7 @@ function updateTrayMenu(recording: boolean = false) {
 }
 
 function createEditorWindowWrapper() {
+	cancelHiddenHudRestoreOnActivation();
 	const existingEditorWindow = getExistingEditorWindow();
 	if (existingEditorWindow) {
 		mainWindow = existingEditorWindow;
@@ -1195,8 +1257,36 @@ app.on("before-quit", () => {
 	);
 	killWindowsCaptureProcess();
 	showCursor();
-	cleanupNativeVideoExportSessions();
 	void cleanupAllExportStreams();
+});
+
+// "quit" cannot be cancelled (unlike before-quit, which an unsaved editor can
+// cancel), so the activation relay stays available until the app really exits.
+app.on("quit", () => {
+	void appLinks.close();
+});
+
+let nativeExportQuitState: "idle" | "waiting" | "ready" = "idle";
+app.on("will-quit", (event) => {
+	setRecordingZoomShortcutActive(false);
+	if (nativeExportQuitState === "ready") return;
+	if (nativeExportQuitState === "waiting") {
+		event.preventDefault();
+		return;
+	}
+	const cleanup = cleanupNativeVideoExportSessions();
+	if (!cleanup) return;
+	event.preventDefault();
+	nativeExportQuitState = "waiting";
+	let timeout: NodeJS.Timeout | undefined;
+	const deadline = new Promise<void>((resolve) => {
+		timeout = setTimeout(resolve, 3000);
+	});
+	void Promise.race([cleanup, deadline]).finally(() => {
+		clearTimeout(timeout);
+		nativeExportQuitState = "ready";
+		app.quit();
+	});
 });
 
 app.on("window-all-closed", () => {
@@ -1208,13 +1298,15 @@ app.on("window-all-closed", () => {
 app.on("activate", activateDesktopEntryPoint);
 
 app.on("second-instance", async (_event, commandLine, _workingDirectory, additionalData) => {
-	if ((additionalData as { recordlyRecordingLock?: boolean })?.recordlyRecordingLock === true)
-		return;
 	const authCallback = authCallbacks.find(commandLine);
 	if (authCallback) {
 		const routed = await authCallbacks.route(authCallback);
 		if (isAppQuitting) return;
 		if (routed !== "forwarded") focusOrCreateMainWindow();
+	} else if (
+		(additionalData as { recordlyDesktopLaunch?: boolean })?.recordlyDesktopLaunch === true
+	) {
+		bringAppForward();
 	} else {
 		activateDesktopEntryPoint();
 	}
@@ -1232,6 +1324,11 @@ app.whenReady().then(async () => {
 		app.setAsDefaultProtocolClient(authCallbacks.protocol);
 	}
 	const startupAuthCallback = authCallbacks.find(process.argv);
+	if (!startupAuthCallback && (await forwardActivationLink())) {
+		// A running instance came forward; this launcher has no window.
+		app.quit();
+		return;
+	}
 	const routedStartupAuth = await authCallbacks.routeStartup(startupAuthCallback);
 	if (isAppQuitting) return;
 	if (routedStartupAuth === "forwarded") {
@@ -1242,7 +1339,9 @@ app.whenReady().then(async () => {
 	}
 
 	if (process.platform === "win32" && !process.windowsStore) {
-		app.setAppUserModelId("dev.recordly.app");
+		// Dev gets its own taskbar identity; sharing the installed app's ID makes
+		// Windows show the installed shortcut's icon for dev windows.
+		app.setAppUserModelId(IS_DEV ? "dev.recordly.app.dev" : "dev.recordly.app");
 	}
 
 	session.defaultSession.setPermissionCheckHandler(
@@ -1372,6 +1471,10 @@ app.whenReady().then(async () => {
 		authCallbacks.flowStorageHooks,
 	);
 	startupWindowsReady = true;
+	if (process.platform !== "darwin") {
+		void appLinks.listen(bringAppForward);
+		app.on("browser-window-focus", () => void appLinks.markFocused());
+	}
 
 	if (IS_SMOKE_EXPORT || process.env.RECORDLY_DEV_OPEN_RECORDING_INPUT) {
 		await logSmokeExportGpuDiagnostics();
@@ -1403,8 +1506,7 @@ app.whenReady().then(async () => {
 		}, 750);
 	}
 
-	// Register the display media handler so that renderer's getDisplayMedia()
-	// calls land on the pre-selected source without showing a system picker.
+	// Resolve getDisplayMedia to the source chosen in Recordly or the Linux portal.
 	//
 	// IMPORTANT: The callback must receive a plain { id, name } Video object.
 	// Passing the full DesktopCapturerSource (with thumbnail, appIcon, etc.)
@@ -1412,6 +1514,9 @@ app.whenReady().then(async () => {
 	// propagation and causes cursor: 'never' from the renderer to be silently
 	// ignored by the native capture pipeline.
 	session.defaultSession.setDisplayMediaRequestHandler(async (request, callback) => {
+		// Electron accepts null for denial, but its generated Streams type omits it.
+		const respond = callback as (streams: Electron.Streams | null) => void;
+		let video: Awaited<ReturnType<typeof resolveDisplayMediaSource>>;
 		try {
 			const frame = request.frame;
 			const isLiveFrame = Boolean(frame && !frame.isDestroyed());
@@ -1436,7 +1541,7 @@ app.whenReady().then(async () => {
 					getTrustedCaptureDocumentBaseUrls(),
 				)
 			) {
-				callback({});
+				respond(null);
 				return;
 			}
 
@@ -1444,7 +1549,7 @@ app.whenReady().then(async () => {
 			// resolves, before recording-state-changed is emitted.
 			beginHudCaptureProtection();
 
-			const video = await resolveDisplayMediaSource({
+			video = await resolveDisplayMediaSource({
 				platform: process.platform,
 				env: process.env,
 				selectedSourceId: getSelectedSourceId(),
@@ -1454,11 +1559,11 @@ app.whenReady().then(async () => {
 						thumbnailSize: { width: 0, height: 0 },
 					}),
 			});
-			callback(video ? { video } : {});
 		} catch (error) {
 			console.error("setDisplayMediaRequestHandler error:", error);
-			callback({});
+			video = null;
 		}
+		respond(video ? { video } : null);
 	});
 
 	const currentToastPayload = getCurrentUpdateToastPayload();

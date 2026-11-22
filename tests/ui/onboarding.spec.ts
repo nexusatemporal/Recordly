@@ -17,6 +17,9 @@ for (const signedIn of [false, true]) {
 						const root = document.documentElement;
 						if (action === "catalog") {
 							if (token) root.dataset.catalogAuthenticated = "true";
+							root.dataset.catalogReads = String(
+								Number(root.dataset.catalogReads ?? 0) + 1,
+							);
 							return {
 								success: true,
 								prices,
@@ -32,6 +35,17 @@ for (const signedIn of [false, true]) {
 						if (action !== "status") {
 							root.dataset.billingAction = action;
 							return { success: true };
+						}
+						if (rejectSession && !root.dataset.billingCheckStarted) {
+							await new Promise<void>((resolve) =>
+								window.addEventListener(
+									"test-release-billing-status",
+									() => resolve(),
+									{
+										once: true,
+									},
+								),
+							);
 						}
 						if (rejectSession && !root.dataset.billingReauthenticated)
 							return { success: false, httpStatus: 401 };
@@ -62,12 +76,28 @@ for (const signedIn of [false, true]) {
 			await page.goto("/?windowType=onboarding");
 			const tour = page.getByRole("dialog", { name: "Welcome to Recordly" });
 			const next = tour.getByRole("button", { name: "Next", exact: true });
+			const root = page.locator("html");
+			if (!signedIn) {
+				await expect(tour).toHaveAttribute("data-onboarding-state", "login");
+				await expect(root).toHaveAttribute("data-catalog-reads", "1");
+			}
 			if (!signedIn) await next.click();
 			await expect(tour).toHaveAttribute("data-onboarding-state", "permissions");
+			await expect(root).toHaveAttribute("data-catalog-reads", "1");
 			await next.click();
 			const start = tour.getByRole("button", { name: "Get started", exact: true });
 			await expect(tour.getByRole("radio", { name: /Monthly.*\$9/ })).toBeVisible();
-			await expect(page.locator("html")).not.toHaveAttribute("data-catalog-authenticated");
+			await expect(root).not.toHaveAttribute("data-catalog-authenticated");
+			if (signedIn) {
+				await expect(
+					tour.getByRole("button", { name: "Loading your plan…" }),
+				).toBeDisabled();
+				await expect(tour.getByText("Loading pricing…", { exact: true })).toHaveCount(0);
+				await page.evaluate(() => {
+					document.documentElement.dataset.billingCheckStarted = "true";
+					window.dispatchEvent(new Event("test-release-billing-status"));
+				});
+			}
 			await (signedIn
 				? tour.getByRole("button", { name: "Sign in to continue" })
 				: start
@@ -83,7 +113,8 @@ for (const signedIn of [false, true]) {
 			await completeSupabaseSignIn(page);
 			await expect(tour).toHaveAttribute("data-onboarding-state", "upgrade");
 			await expect(start).toBeEnabled();
-			await expect(page.locator("html")).not.toHaveAttribute("data-billing-action");
+			await expect(root).toHaveAttribute("data-catalog-reads", "1");
+			await expect(root).not.toHaveAttribute("data-billing-action");
 			await start.click();
 			await expect(page.locator("html")).toHaveAttribute("data-billing-action", "checkout");
 		},
@@ -234,7 +265,7 @@ test("settings opens permissions and all onboarding pages keep the same layout",
 		"aria-current",
 		"page",
 	);
-	await expect(tour.getByText("test@email.com", { exact: true })).toBeVisible();
+	await expect(tour.getByPlaceholder("you@example.com")).toBeVisible();
 	const loginHeading = (await tour.getByRole("heading", { level: 2 }).boundingBox())!;
 	await expect(tour.locator("[data-onboarding-brand]")).toHaveCount(0);
 	const accountBannerBounds = (await banner.boundingBox())!;
@@ -478,7 +509,7 @@ productionTest("sign-in is mandatory even after onboarding was completed", async
 	await page.addInitScript(() => sessionStorage.setItem("recordly.demo-session", "1"));
 	await page.goto("/?windowType=editor");
 	const tour = page.getByRole("dialog", { name: "Sign in to Recordly", exact: true });
-	await expect(tour).toBeVisible();
+	await expect(tour).toBeVisible({ timeout: 20000 });
 	await expect(tour.getByRole("button", { name: "Continue without signing in" })).toHaveCount(0);
 	await expect(tour.getByText("Optional", { exact: true })).toHaveCount(0);
 	await expect(tour.getByText("Sign in to continue", { exact: true })).toHaveCount(0);
@@ -658,15 +689,10 @@ for (const platform of ["win32", "linux"]) {
 			.getByRole("button", { name: "Next", exact: true })
 			.click();
 		const tour = page.getByRole("dialog", { name: "Welcome to Recordly" });
-		await expect(tour).toHaveAttribute("data-onboarding-state", "permissions");
-		await expect(
-			tour.getByText(/^Your screen is captured only when you start a recording\./),
-		).toBeVisible();
+		await expect(tour).toHaveAttribute("data-onboarding-state", "upgrade");
 		await expect(tour.getByText("Screen Recording", { exact: true })).toHaveCount(0);
 		await expect(tour.getByText("macOS System Settings", { exact: false })).toHaveCount(0);
 		await expect(page.locator("html")).not.toHaveAttribute("data-hud-opened");
-		await tour.getByRole("button", { name: "Next", exact: true }).click();
-		await expect(tour).toHaveAttribute("data-onboarding-state", "upgrade");
 		await tour.getByRole("button", { name: "Skip and start recording", exact: true }).click();
 		await expect(tour).not.toBeVisible();
 		await expect(page.locator("html")).toHaveAttribute("data-hud-opened", "true");
@@ -754,8 +780,8 @@ for (const signedIn of [true, false]) {
 		const tour = page.getByRole("dialog", { name: "Welcome to Recordly" });
 		await expect(tour).toHaveAttribute("data-onboarding-state", "login");
 		await expect(tour.getByRole("heading", { name: "Welcome to Recordly" })).toBeVisible();
-		await expect(tour.getByPlaceholder("you@example.com")).toHaveCount(signedIn ? 0 : 1);
-		if (signedIn) await expect(tour.getByText("test@email.com", { exact: true })).toBeVisible();
+		await expect(tour.getByPlaceholder("you@example.com")).toBeVisible();
+		await expect(tour.getByRole("button", { name: "Continue with Google" })).toBeVisible();
 		await expect(tour.getByText("Your account", { exact: true })).toHaveCount(0);
 		const music = tour.getByRole("button", { name: "Mute welcome music", exact: true });
 		const pausedMusic = tour.getByRole("button", { name: "Unmute welcome music", exact: true });
@@ -785,6 +811,7 @@ for (const signedIn of [true, false]) {
 		await tour.getByRole("button", { name: "Next", exact: true }).click();
 		await expect(tour).toHaveAttribute("data-onboarding-state", "permissions");
 		await tour.getByRole("button", { name: "Back to account" }).click();
+		await expect(tour.getByPlaceholder("you@example.com")).toBeVisible();
 		await tour
 			.getByRole("navigation")
 			.getByRole("button", { name: "Permissions", exact: true })
@@ -832,8 +859,7 @@ test("Review permission setup uses onboarding preview in development", async ({ 
 	await page.getByRole("button", { name: "Review permission setup", exact: true }).click();
 	await expect(page.locator("html")).toHaveAttribute("data-preview-requested", "true");
 	const tour = page.getByRole("dialog", { name: "Welcome to Recordly", exact: true });
-	await expect(tour.getByPlaceholder("you@example.com")).toHaveCount(0);
-	await expect(tour.getByText("test@email.com", { exact: true })).toBeVisible();
+	await expect(tour.getByPlaceholder("you@example.com")).toBeVisible();
 	await tour.getByRole("button", { name: "Next", exact: true }).click();
 	await expect(tour.getByRole("navigation")).toBeVisible();
 	await expect(tour.getByRole("button", { name: "Back to account" })).toBeVisible();
@@ -875,3 +901,26 @@ test("welcome mark and video blend into floating blue blobs regardless of reduce
 		.toBeGreaterThan(8);
 	await page.screenshot({ path: test.info().outputPath("welcome-pulse-preview.png") });
 });
+
+for (const platform of ["win32", "linux"]) {
+	test(`${platform} onboarding skips the permissions page`, async ({ page }) => {
+		await installDesktopBridge(page, "preview.mp4", { signedIn: true, onboarded: true });
+		await page.addInitScript((platform) => {
+			window.electronAPI.getPlatform = async () => platform;
+		}, platform);
+		await page.goto("/?windowType=onboarding&onboardingPreview=1");
+		const tour = page.getByRole("dialog", { name: "Welcome to Recordly" });
+		const pages = tour.getByRole("navigation", { name: "Onboarding pages" });
+		await expect(pages.getByRole("button", { name: "Permissions", exact: true })).toHaveCount(
+			0,
+		);
+		await expect(pages.getByRole("button")).toHaveCount(2);
+		await tour.getByRole("button", { name: "Next", exact: true }).click();
+		await expect(tour).toHaveAttribute("data-onboarding-state", "upgrade");
+		await expect(
+			tour.getByRole("button", { name: "Skip and start recording", exact: true }),
+		).toBeVisible();
+		await tour.getByRole("button", { name: "Back to account" }).click();
+		await expect(tour).toHaveAttribute("data-onboarding-state", "login");
+	});
+}

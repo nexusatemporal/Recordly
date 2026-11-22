@@ -4,6 +4,7 @@ export const SHORTCUT_ACTIONS = [
 	"addAnnotation",
 	"addKeyframe",
 	"deleteSelected",
+	"duplicateSelected",
 	"playPause",
 ] as const;
 
@@ -27,9 +28,15 @@ export function serializeShortcuts(config: ShortcutsConfig) {
 
 export interface FixedShortcut {
 	label: string;
-	display: string;
+	display?: string;
 	bindings: ShortcutBinding[];
 }
+
+export const CLEAR_ALL_ZOOMS_SHORTCUT: ShortcutBinding = {
+	key: "backspace",
+	ctrl: true,
+	shift: true,
+};
 
 export const FIXED_SHORTCUTS: FixedShortcut[] = [
 	{ label: "Cycle Annotations Forward", display: "Tab", bindings: [{ key: "tab" }] },
@@ -43,6 +50,7 @@ export const FIXED_SHORTCUTS: FixedShortcut[] = [
 		display: "Del / ⌫",
 		bindings: [{ key: "delete" }, { key: "backspace" }],
 	},
+	{ label: "Clear All Zooms", bindings: [CLEAR_ALL_ZOOMS_SHORTCUT] },
 	{ label: "Pan Timeline", display: "Shift + Scroll", bindings: [] },
 	{ label: "Zoom Timeline", display: "Ctrl + Scroll", bindings: [] },
 ];
@@ -84,6 +92,7 @@ export const DEFAULT_SHORTCUTS: ShortcutsConfig = {
 	addAnnotation: { key: "a" },
 	addKeyframe: { key: "f" },
 	deleteSelected: { key: "d", ctrl: true },
+	duplicateSelected: { key: "d", ctrl: true, shift: true },
 	playPause: { key: " " },
 };
 
@@ -93,6 +102,7 @@ export const SHORTCUT_LABELS: Record<ShortcutAction, string> = {
 	addAnnotation: "Add Annotation",
 	addKeyframe: "Add Keyframe",
 	deleteSelected: "Delete Selected",
+	duplicateSelected: "Duplicate Selected",
 	playPause: "Play / Pause",
 };
 
